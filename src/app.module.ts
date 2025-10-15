@@ -2,8 +2,8 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ContentTypeModule, } from './content-type/content-type.module';
-import { ComponentModule } from './component/component.module';
+import { ContentManagerModule, } from './content-manager/content-manager.module';
+import { ContentTypeBuilderModule } from './content-type-builder/content-type-builder.module';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -20,8 +20,8 @@ import { ComponentModule } from './component/component.module';
         max: 10, // <= maximum connections allowed
       },
     }),
-    ContentTypeModule,
-    ComponentModule
+    ContentTypeBuilderModule,
+    ContentManagerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

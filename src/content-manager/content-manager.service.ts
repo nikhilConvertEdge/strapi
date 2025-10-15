@@ -1,20 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { ComponentService } from 'src/component/component.service';
 
 @Injectable()
-export class ContentTypeService {
-  constructor(
-    private readonly dataSource: DataSource,
-    private readonly componentService: ComponentService,
-  ) { }
+export class ContentManagerService {
+  constructor(private readonly contentManager: DataSource) { }
 
+  // ------------------ CREATE ENTITY ------------------
   async create(collectionName: string, data: any) {
     const tableName = collectionName;
     const payload = data.attributes ?? data;
 
-    // Fetch schema
-    const [schemaRow] = await this.dataSource.query(
+    // 1️⃣ Fetch schema metadata
+    const [schemaRow] = await this.contentManager.query(
       `SELECT schema FROM schemas WHERE collection_name=$1`,
       [collectionName],
     );
@@ -29,35 +26,44 @@ export class ContentTypeService {
     const relationEntries: { key: string; value: any }[] = [];
     const normalData: any = {};
 
-    // Separate normal fields, components, dynamic zones, relations
+    // 2️⃣ Separate normal fields, components, dynamic zones, relations
     for (const key of Object.keys(payload)) {
       const value = payload[key];
-      if (value?.type === 'component') componentEntries.push({ key, value });
-      else if (key === 'dynamicZone' && Array.isArray(value)) {
+      if (value?.type === 'component') {
+        componentEntries.push({ key, value });
+      } else if (key === 'dynamicZone' && Array.isArray(value)) {
         value.forEach((dzItem) => {
           const dzKey = Object.keys(dzItem)[0];
-          const dzValue = dzItem[dzKey];
-          dynamicZoneEntries.push({ key: dzKey, value: dzValue });
+          dynamicZoneEntries.push({ key: dzKey, value: dzItem[dzKey] });
         });
-      } else if (value?.type === 'relation') relationEntries.push({ key, value });
-      else normalData[key] = value;
+      } else if (value?.type === 'relation') {
+        relationEntries.push({ key, value });
+      } else {
+        normalData[key] = value;
+      }
     }
 
-    // 1️⃣ Insert main entity
+    // 3️⃣ Insert main entity
     const entity = await this.insertEntity(tableName, normalData);
     const entityId = entity.id;
 
-    // 2️⃣ Insert top-level components
+    // 4️⃣ Insert top-level components
     for (const { key, value } of componentEntries) {
-      await this.insertComponent(tableName, entityId, key, value, key); // field = key
+      await this.insertComponent(tableName, entityId, key, value, key);
     }
 
-    // 3️⃣ Insert dynamic zone components
+    // 5️⃣ Insert dynamic zone components
     for (const { key, value } of dynamicZoneEntries) {
-      await this.insertComponent(tableName, entityId, key, value, 'dynamicZone'); // field = 'dynamicZone'
+      await this.insertComponent(
+        tableName,
+        entityId,
+        key,
+        value,
+        'dynamicZone',
+      );
     }
 
-    // 4️⃣ Insert relations
+    // 6️⃣ Insert relations
     for (const { key, value } of relationEntries) {
       await this.insertRelation(entityId, key, value, relationTables);
     }
@@ -71,13 +77,14 @@ export class ContentTypeService {
     parentId: number,
     compKey: string,
     compData: any,
-    field: string // field to store in junction table
+    field: string, // 'features' or 'dynamicZone'
   ) {
+    // Determine component table name
     const componentName =
       compData.component?.replace(/-/g, '_') ?? compKey.replace(/-/g, '_');
     const componentTable = `component_${componentName}`;
 
-    // Normal fields
+    // 1️⃣ Insert normal fields into component table
     const cols = Object.keys(compData).filter(
       (k) =>
         !['type', 'component'].includes(k) && compData[k]?.type !== 'component',
@@ -89,17 +96,19 @@ export class ContentTypeService {
     VALUES (${vals.map((_, i) => `$${i + 1}`).join(', ')})
     RETURNING *;
   `;
-    const [compRow] = await this.dataSource.query(compInsertQuery, vals);
+    const [compRow] = await this.contentManager.query(compInsertQuery, vals);
 
-    // Link to parent entity with proper field
+    // 2️⃣ Link component to parent in junction table
     const junctionTable = `${parentTable}_components`;
-    await this.dataSource.query(
-      `INSERT INTO "${junctionTable}" (entity_id, component_id, component_type, field)
-     VALUES ($1, $2, $3, $4);`,
+    await this.contentManager.query(
+      `
+    INSERT INTO "${junctionTable}" (entity_id, component_id, component_type, field)
+    VALUES ($1, $2, $3, $4);
+  `,
       [parentId, compRow.id, componentName, field],
     );
 
-    // Recursively insert nested components
+    // 3️⃣ Recursively insert nested components
     for (const key of Object.keys(compData)) {
       const val = compData[key];
       if (val?.type === 'component') {
@@ -109,7 +118,6 @@ export class ContentTypeService {
 
     return compRow;
   }
-
 
   // ------------------ CREATE MAIN ENTITY ------------------
   async insertEntity(tableName: string, data: any) {
@@ -130,10 +138,9 @@ export class ContentTypeService {
     VALUES (${placeholders})
     RETURNING *;
   `;
-    const [entity] = await this.dataSource.query(insertQuery, values);
+    const [entity] = await this.contentManager.query(insertQuery, values);
     return entity;
   }
-
 
   // ------------------ INSERT RELATIONS ------------------
   async insertRelation(
@@ -142,21 +149,26 @@ export class ContentTypeService {
     relationData: any,
     relationTables: any,
   ) {
-    const relationTable = relationTables[relationKey];
-    if (!relationTable)
+    console.log(entityId);
+    console.log(relationKey);
+    console.log(relationData);
+    console.log(relationTables);
+
+    const relationInfo = relationTables[relationKey];
+    if (!relationInfo)
       throw new Error(`Relation table not found for key ${relationKey}`);
-    await this.dataSource.query(
-      `INSERT INTO "${relationTable}" (entity_id, ${relationKey}_id) VALUES ($1, $2);`,
+
+    const junctionTable = relationInfo.junction; // Use junction table name
+    await this.contentManager.query(
+      `INSERT INTO "${junctionTable}" (entity_id, ${relationKey}_id) VALUES ($1, $2);`,
       [entityId, relationData.id],
     );
   }
 
-  // ------------------ FETCH MAIN ENTITY ------------------
-
   // ------------------ FIND ONE ------------------
   async findOne(collectionName: string, entityId: number) {
     // 1️⃣ Fetch schema metadata
-    const [schemaRow] = await this.dataSource.query(
+    const [schemaRow] = await this.contentManager.query(
       `SELECT schema FROM schemas WHERE collection_name=$1`,
       [collectionName],
     );
@@ -166,7 +178,7 @@ export class ContentTypeService {
     const { components = {}, relations = {}, mainTable } = metadata;
 
     // 2️⃣ Fetch main entity
-    const [entity] = await this.dataSource.query(
+    const [entity] = await this.contentManager.query(
       `SELECT * FROM "${mainTable}" WHERE id=$1`,
       [entityId],
     );
@@ -189,7 +201,7 @@ export class ContentTypeService {
     return { ...entity, ...fetchedComponents, ...fetchedRelations };
   }
 
-
+  // ------------------ FETCH COMPONENTS RECURSIVELY ------------------
 
   async fetchComponentsFromMetadata(
     parentTable: string,
@@ -197,74 +209,98 @@ export class ContentTypeService {
     componentsMeta: Record<string, string>,
   ) {
     const result: any = {};
-    const dynamicZoneArray: any[] = [];
 
     for (const [compKey, junctionTable] of Object.entries(componentsMeta)) {
-      const linked = await this.dataSource.query(
+      // 1️⃣ Get linked component rows from junction table
+      const linkedRows = await this.contentManager.query(
         `SELECT component_id, component_type, field FROM "${junctionTable}" WHERE entity_id=$1`,
         [parentId],
       );
-      if (!linked.length) continue;
+      if (!linkedRows.length) continue;
 
-      for (const link of linked) {
+      for (const link of linkedRows) {
         const compTable = `component_${link.component_type.replace(/-/g, '_')}`;
-        const [compRow] = await this.dataSource.query(
+
+        // 2️⃣ Fetch component data
+        const [compRow] = await this.contentManager.query(
           `SELECT * FROM "${compTable}" WHERE id=$1`,
           [link.component_id],
         );
         if (!compRow) continue;
 
-        // -----------------------------
-        // ONLY pass empty meta for nested components
-        // -----------------------------
+        // 3️⃣ Fetch nested component metadata from schemas
+        const [compSchemaRow] = await this.contentManager.query(
+          `SELECT schema FROM schemas WHERE collection_name=$1`,
+          [link.component_type],
+        );
+        const compSchema = compSchemaRow?.schema;
+        const nestedComponentsMeta = compSchema?.components || {};
+
+        // 4️⃣ Recursively fetch nested components
         const nestedComponents = await this.fetchComponentsFromMetadata(
           compTable,
           compRow.id,
-          {}, // avoid looping over unrelated top-level components
+          nestedComponentsMeta,
         );
 
-        const compData = { ...compRow, ...nestedComponents };
+        // 5️⃣ Merge component data
+        const compData = {
+          type: link.component_type,
+          ...compRow,
+          ...nestedComponents,
+        };
 
-        if (link.field !== 'dynamicZone') {
-          result[link.field] = compData;
+        // 6️⃣ Assign to result
+        if (link.field === 'dynamicZone') {
+          if (!result[link.field]) result[link.field] = [];
+          result[link.field].push(compData);
         } else {
-          dynamicZoneArray.push({ [link.component_type]: compData });
+          result[link.field] = compData;
         }
       }
     }
 
-    if (dynamicZoneArray.length) result['dynamicZone'] = dynamicZoneArray;
     return result;
   }
 
-
-
+  // ------------------ FETCH RELATIONS ------------------
   // ------------------ FETCH RELATIONS ------------------
   async fetchRelationsFromMetadata(
     entityId: number,
     relationsMeta: Record<string, { junction: string; target: string }>,
   ) {
-    const result: any = {};
+    const result: Record<string, any> = {};
 
-    for (const [key, { junction, target }] of Object.entries(relationsMeta)) {
-      // 1️⃣ Get related IDs from junction
-      const rows = await this.dataSource.query(
-        `SELECT ${key}_id FROM "${junction}" WHERE entity_id=$1`,
-        [entityId],
-      );
-      const ids = rows.map((r: any) => r[`${key}_id`]);
-      if (!ids.length) {
+    for (const [key, relation] of Object.entries(relationsMeta)) {
+      const junctionTable = relation.junction;
+      const targetTable = relation.target;
+
+      if (!junctionTable || !targetTable) {
         result[key] = null;
         continue;
       }
 
-      // 2️⃣ Fetch target table rows
-      const relatedRows = await this.dataSource.query(
-        `SELECT * FROM "${target}" WHERE id = ANY($1)`,
-        [ids],
+      // Safely get the column name (e.g., role_id)
+      const columnName = `${key}_id`;
+
+      const rows = await this.contentManager.query(
+        `SELECT "${columnName}" FROM "${junctionTable}" WHERE entity_id = $1`,
+        [entityId],
       );
 
-      result[key] = relatedRows.length === 1 ? relatedRows[0] : relatedRows;
+      if (!rows.length) {
+        result[key] = null;
+        continue;
+      }
+
+      const relatedId = rows[0][columnName];
+
+      const [relatedRow] = await this.contentManager.query(
+        `SELECT * FROM "${targetTable}" WHERE id = $1`,
+        [relatedId],
+      );
+
+      result[key] = relatedRow || null;
     }
 
     return result;
