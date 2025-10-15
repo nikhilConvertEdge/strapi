@@ -42,30 +42,9 @@ export class ContentTypeBuilderService {
 		await this.contentTypeBuilder.query(createQuery);
 		console.log(`✅ Table '${tableName}' created successfully`);
 
-		// 4️⃣ Build metadata (components, dynamicZones, relations can be added later if needed)
-		const components: Record<string, string> = {};
-		const dynamicZones: Record<string, string> = {};
-		const relations: Record<string, { junction: string; target: string }> = {};
-
-		for (const [attrName, attr] of Object.entries<any>(schema.attributes)) {
-			if (attr.type === 'component') {
-				const safeComponentName = attr.component.replace(/[-\s]/g, '_');
-				const relationTable = `${tableName}_components`;
-				components[attrName] = relationTable;
-			}
-			if (attr.type === 'relation') {
-				const relationTable = `${tableName}_${attrName}_link`;
-				relations[attrName] = { junction: relationTable, target: attr.target };
-			}
-			// dynamic zones skipped for now
-		}
-
 		const metadata = {
 			collectionName: schema.collectionName,
 			mainTable: tableName,
-			components,
-			dynamicZones,
-			relations,
 			schema,
 		};
 
@@ -135,7 +114,6 @@ export class ContentTypeBuilderService {
 			if (attrObj.type !== 'component') continue;
 
 			const safeComponentName = attrObj.component!.replace(/[-\s]/g, '_');
-			const componentTableName = `component_${safeComponentName}`;
 			const relationTable = `${tableName}_components`;
 
 			components[attrName] = relationTable;
@@ -181,7 +159,6 @@ export class ContentTypeBuilderService {
 				if (attrObj.type !== 'component') continue;
 
 				const safeComponentName = attrObj.component!.replace(/[-\s]/g, '_');
-				const componentTableName = `component_${safeComponentName}`;
 				const relationTable = `${tableName}_components`;
 
 				dynamicZone[attrName] = relationTable;
