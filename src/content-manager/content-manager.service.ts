@@ -149,11 +149,6 @@ export class ContentManagerService {
     relationData: any,
     relationTables: any,
   ) {
-    console.log(entityId);
-    console.log(relationKey);
-    console.log(relationData);
-    console.log(relationTables);
-
     const relationInfo = relationTables[relationKey];
     if (!relationInfo)
       throw new Error(`Relation table not found for key ${relationKey}`);

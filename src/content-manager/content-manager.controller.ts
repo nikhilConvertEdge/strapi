@@ -5,6 +5,7 @@ import {
   Param,
   Body,
   ParseIntPipe,
+  Put,
 } from '@nestjs/common';
 import { ContentManagerService } from './content-manager.service';
 
@@ -25,4 +26,6 @@ export class ContentManagerController {
     const entity = await this.service.findOne(collection, id);
     return { success: true, data: entity };
   }
+
+
 }
